@@ -111,6 +111,39 @@ def infer_one_image(img_path: str, text_prompt: str = TEXT_PROMPT):
     if masks.ndim == 4:
         masks = masks.squeeze(1)
 
+    # 生成并保存语义图（背景为0，尺寸与原图一致）
+    masks_bool = masks.astype(bool)
+    if masks_bool.size == 0:
+        semantic_map = np.zeros((h, w), dtype=np.int32)
+    else:
+        # 将 scores 转为 numpy
+        if isinstance(scores, torch.Tensor):
+            scores_np = scores.detach().float().cpu().numpy()
+        else:
+            scores_np = np.asarray(scores, dtype=np.float32)
+
+        # 类别名称来自 Grounding DINO 的 labels
+        class_names = labels
+        # 类别到索引的映射，从1开始（0为背景）
+        class_to_index = {}
+        next_idx = 1
+        class_indices_per_det = []
+        for name in class_names:
+            if name not in class_to_index:
+                class_to_index[name] = next_idx
+                next_idx += 1
+            class_indices_per_det.append(class_to_index[name])
+        class_indices_per_det = np.asarray(class_indices_per_det, dtype=np.int32)
+
+        # 以得分加权，选择每个像素最优实例对应的类别索引
+        score_stack = masks_bool.astype(np.float32) * scores_np[:, None, None]
+        best_inst = np.argmax(score_stack, axis=0)
+        best_score = np.max(score_stack, axis=0)
+        semantic_map = np.where(best_score > 0.0, class_indices_per_det[best_inst], 0).astype(np.int32)
+
+    # 保存到每图输出目录
+    np.save(os.path.join(per_image_outdir, "semantic_map.npy"), semantic_map)
+
     confidences = confidences.numpy().tolist()
     class_names = labels
     class_ids = np.array(list(range(len(class_names))))
